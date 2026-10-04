@@ -1,0 +1,18 @@
+const http=require('http'),fs=require('fs'),path=require('path'),url=require('url');
+const ROOT=__dirname, DB=path.join(ROOT,'data/db.json'), PORT=process.env.PORT||8080;
+function read(){return JSON.parse(fs.readFileSync(DB,'utf8'))} function write(d){fs.writeFileSync(DB,JSON.stringify(d,null,2))}
+function send(res,status,obj){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Access-Control-Allow-Origin':'*'});res.end(JSON.stringify(obj))}
+function body(req){return new Promise((resolve,reject)=>{let b='';req.on('data',x=>b+=x);req.on('end',()=>{try{resolve(b?JSON.parse(b):{})}catch(e){reject(e)}})})}
+function staticFile(res,p){const safe=path.normalize(p).replace(/^\.\.(\/|\\)/,'');let f=path.join(ROOT,'public',safe);if(p==='/'||p==='')f=path.join(ROOT,'public/customer/index.html');if(!fs.existsSync(f)||fs.statSync(f).isDirectory())return false;const ext=path.extname(f),types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json'};res.writeHead(200,{'Content-Type':types[ext]||'application/octet-stream'});fs.createReadStream(f).pipe(res);return true}
+const app=http.createServer(async(req,res)=>{const u=url.parse(req.url,true),p=u.pathname;
+if(req.method==='OPTIONS'){res.writeHead(204,{'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'Content-Type'});return res.end()}
+try{
+ if(p==='/api/health')return send(res,200,{ok:true,service:'TEIKA',city:'Khartoum, Sudan'});
+ if(p==='/api/restaurants')return send(res,200,read().restaurants);
+ if(p==='/api/orders'&&req.method==='GET')return send(res,200,read().orders.slice().reverse());
+ if(p==='/api/orders'&&req.method==='POST'){const b=await body(req),d=read();const subtotal=(b.items||[]).reduce((s,i)=>s+i.price*i.qty,0),r=d.restaurants.find(x=>x.id===b.restaurantId);if(!r)return send(res,400,{error:'Restaurant not found'});const o={id:'TK'+Date.now(),createdAt:new Date().toISOString(),status:'pending',customerName:b.customerName||'عميل',phone:b.phone||'',address:b.address||'',restaurantId:r.id,restaurantName:r.name,items:b.items||[],subtotal,deliveryFee:r.deliveryFee,total:subtotal+r.deliveryFee,payment:'cash',driverId:null};d.orders.push(o);write(d);return send(res,201,o)}
+ if(p.startsWith('/api/orders/')&&req.method==='PATCH'){const id=p.split('/').pop(),b=await body(req),d=read(),o=d.orders.find(x=>x.id===id);if(!o)return send(res,404,{error:'Order not found'});Object.assign(o,b);write(d);return send(res,200,o)}
+ if(p==='/api/stats') {const d=read(),orders=d.orders;return send(res,200,{orders:orders.length,pending:orders.filter(o=>o.status==='pending').length,delivered:orders.filter(o=>o.status==='delivered').length,sales:orders.reduce((s,o)=>s+o.total,0),commission:orders.reduce((s,o)=>s+o.subtotal*d.settings.commission/100,0)})}
+ if(p==='/api/login'&&req.method==='POST'){const b=await body(req);const demo={customer:{phone:'249900000001',password:'123456'},restaurant:{phone:'249900000002',password:'123456'},captain:{phone:'249900000003',password:'123456'},admin:{phone:'249900000099',password:'admin123'}};const x=demo[b.role];if(x&&x.phone===b.phone&&x.password===b.password)return send(res,200,{ok:true,role:b.role});return send(res,401,{error:'بيانات الدخول غير صحيحة'})}
+ let fp=p; if(p==='/captain'||p.startsWith('/captain/'))fp='/captain/index.html'; if(p==='/restaurant'||p.startsWith('/restaurant/'))fp='/restaurant/index.html';if(p==='/admin'||p.startsWith('/admin/'))fp='/admin/index.html'; if(staticFile(res,fp))return;res.writeHead(404);res.end('Not found');
+}catch(e){send(res,500,{error:e.message})}});app.listen(PORT,()=>console.log(`TEIKA running on http://localhost:${PORT}`));
